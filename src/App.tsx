@@ -66,8 +66,8 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   
   // Auth state
-  const [usernameInput, setUsernameInput] = useState('');
-  const [passwordInput, setPasswordInput] = useState('');
+  const [usernameInput, setUsernameInput] = useState('demo');
+  const [passwordInput, setPasswordInput] = useState('demo');
   const [authError, setAuthError] = useState('');
 
   // Domain states
@@ -571,12 +571,18 @@ export default function App() {
             </div>
           )}
 
+          <div style={{ backgroundColor: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', padding: '12px', borderRadius: '8px', marginBottom: '20px', fontSize: '13px' }}>
+            <p style={{ margin: '0 0 8px 0', fontWeight: 600, color: 'var(--primary)' }}>Demo Credentials:</p>
+            <p style={{ margin: '4px 0', color: 'var(--text-secondary)' }}>Username: <strong>demo</strong></p>
+            <p style={{ margin: '4px 0', color: 'var(--text-secondary)' }}>Password: <strong>demo</strong></p>
+          </div>
+
           <div className="form-group">
             <label className="form-label">Username</label>
             <input 
               type="text" 
               className="form-input" 
-              placeholder="e.g. admin"
+              placeholder="e.g. demo"
               value={usernameInput}
               onChange={(e) => setUsernameInput(e.target.value)}
               required
@@ -601,7 +607,7 @@ export default function App() {
           </button>
 
           <p style={{ marginTop: '24px', fontSize: '12px', color: 'var(--text-muted)' }}>
-            Sandbox Demo: Any credentials auto-registers / signs in.
+            Sandbox Demo: Enter any username/password or use the credentials above.
           </p>
         </form>
       </div>
