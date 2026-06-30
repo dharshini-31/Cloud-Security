@@ -2,8 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Shield, LayoutDashboard, Cloud, ShieldAlert, Users, 
   FileText, Settings, Play, RefreshCw, Plus, 
-  Trash2, CheckCircle, XCircle,
-  ArrowRight, Download, Search, ExternalLink,
+  Trash2, CheckCircle, XCircle, 
+  ArrowRight, Download, Search, Database, ExternalLink,
   ChevronRight, X, ShieldCheck
 } from 'lucide-react';
 import { 
@@ -26,6 +26,8 @@ import type {
   Report
 } from './types';
 
+// Types are imported from './types' above
+
 export default function App() {
   const [page, setPage] = useState<string>('Dashboard');
   const [user, setUser] = useState<User | null>(null);
@@ -35,7 +37,7 @@ export default function App() {
   const [passwordInput, setPasswordInput] = useState('demo');
 
   // Domain states - always use mock data
-  const [dashboardData] = useState<DashboardData>(mockDashboardData);
+  const [dashboardData, setDashboardData] = useState<DashboardData>(mockDashboardData);
   const [cloudAccounts, setCloudAccounts] = useState<CloudAccount[]>(mockCloudAccounts);
   const [scans, setScans] = useState<Scan[]>(mockScans);
   const [findings, setFindings] = useState<Finding[]>(mockFindings);
@@ -51,7 +53,6 @@ export default function App() {
   const [newAccSecret, setNewAccSecret] = useState('');
   const [newAccRegion, setNewAccRegion] = useState('us-east-1');
   const [accountActionLoading, setAccountActionLoading] = useState<number | null>(null);
-  const [connMessage, setConnMessage] = useState<{ id: number; text: string; success: boolean } | null>(null);
 
   // Filters
   const [selectedAccountFilter, setSelectedAccountFilter] = useState<string>('all');
@@ -121,172 +122,319 @@ export default function App() {
     localStorage.setItem('vapt_user', JSON.stringify(mockUser));
     setUser(mockUser);
   };
+    try {
+      const data = await apiCall('/auth/login/', {
+        method: 'POST',
+        body: JSON.stringify({ username: usernameInput, password: passwordInput })
+      });
+      localStorage.setItem('vapt_token', data.token);
+      localStorage.setItem('vapt_user', JSON.stringify(data.user));
+      setUser(data.user);
+    } catch (err: any) {
+      // Automatically use demo mode if backend is not available
+      // Any username/password works in demo mode
+      const mockUser = { 
+        username: usernameInput || 'demo', 
+        email: `${usernameInput || 'demo'}@example.com`, 
+        first_name: usernameInput || 'Demo User' 
+      };
+      localStorage.setItem('vapt_token', 'mock-token');
+      localStorage.setItem('vapt_user', JSON.stringify(mockUser));
+      setUser(mockUser);
+      setIsDemoMode(true);
+    }
+  };
 
   const handleLogout = () => {
+    localStorage.removeItem('vapt_token');
     localStorage.removeItem('vapt_user');
     setUser(null);
     stopScanPolling();
   };
 
-  // Account Operations - local only
-  const handleAddAccount = (e: React.FormEvent) => {
+  // Account Operations
+  const handleAddAccount = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newAccName || !newAccKey || !newAccSecret) return;
 
-    const newAcc: CloudAccount = {
-      id: Date.now(),
+    const body = {
       name: newAccName,
-      access_key: newAccKey.substring(0, 4) + '****************',
-      region: newAccRegion,
-      status: 'connected',
-      last_scan: null,
-      created_at: new Date().toISOString()
+      access_key: newAccKey,
+      secret_key: newAccSecret,
+      region: newAccRegion
     };
-    setCloudAccounts([newAcc, ...cloudAccounts]);
-    
-    // Reset
-    setNewAccName('');
-    setNewAccKey('');
-    setNewAccSecret('');
-    setNewAccRegion('us-east-1');
-    setShowAddAccount(false);
+
+    try {
+      if (isDemoMode) {
+        const newAcc: CloudAccount = {
+          id: Date.now(),
+          name: newAccName,
+          access_key: newAccKey.substring(0, 4) + '****************',
+          region: newAccRegion,
+          status: 'connected',
+          last_scan: null,
+          created_at: new Date().toISOString()
+        };
+        setCloudAccounts([newAcc, ...cloudAccounts]);
+      } else {
+        await apiCall('/accounts/', {
+          method: 'POST',
+          body: JSON.stringify(body)
+        });
+        fetchData();
+      }
+      
+      // Reset
+      setNewAccName('');
+      setNewAccKey('');
+      setNewAccSecret('');
+      setNewAccRegion('us-east-1');
+      setShowAddAccount(false);
+    } catch (err: any) {
+      alert(err.message || 'Failed to connect account');
+    }
   };
 
-  const handleTestConnection = (id: number) => {
+  const handleTestConnection = async (id: number) => {
     setAccountActionLoading(id);
     setConnMessage(null);
-    setTimeout(() => {
-      setConnMessage({ id, text: 'Connection Successful! Validated IAM Access Key.', success: true });
+    try {
+      if (isDemoMode) {
+        await new Promise(r => setTimeout(r, 600));
+        setConnMessage({ id, text: 'Connection Successful! Validated IAM Access Key.', success: true });
+      } else {
+        const res = await apiCall(`/accounts/${id}/test_connection/`, { method: 'POST' });
+        setConnMessage({ id, text: res.message || 'Connected successfully!', success: true });
+        fetchData();
+      }
+    } catch (err: any) {
+      setConnMessage({ id, text: err.message || 'Connection check failed.', success: false });
+    } finally {
       setAccountActionLoading(null);
-    }, 600);
+    }
   };
 
-  const handleDeleteAccount = (id: number) => {
+  const handleDeleteAccount = async (id: number) => {
     if (!confirm('Are you sure you want to disconnect this cloud account? All associated findings and scans will be deleted.')) return;
-    setCloudAccounts(cloudAccounts.filter(a => a.id !== id));
+    try {
+      if (isDemoMode) {
+        setCloudAccounts(cloudAccounts.filter(a => a.id !== id));
+      } else {
+        await apiCall(`/accounts/${id}/`, { method: 'DELETE' });
+        fetchData();
+      }
+    } catch (err: any) {
+      alert(err.message || 'Delete failed');
+    }
   };
 
-  // Scan Actions - local only
-  const handleTriggerScan = (accountId: number, scanType: string = 'combined') => {
-    const newScanId = Date.now();
-    const acc = cloudAccounts.find(a => a.id === accountId);
-    const newScan: Scan = {
-      id: newScanId,
-      name: `Quick Assessment - ${acc?.name || 'AWS'}`,
-      cloud_account: accountId,
-      cloud_account_name: acc?.name || 'AWS',
-      cloud_provider: 'AWS',
-      scan_type: scanType as any,
-      status: 'running',
-      findings_count: 0,
-      overall_score: 100,
-      created_at: new Date().toISOString(),
-      completed_at: null
-    };
-    setScans([newScan, ...scans]);
-    setPage('Scans');
+  // Scan Actions
+  const handleTriggerScan = async (accountId: number, scanType: string = 'combined') => {
+    try {
+      if (isDemoMode) {
+        const newScanId = Date.now();
+        const acc = cloudAccounts.find(a => a.id === accountId);
+        const newScan: Scan = {
+          id: newScanId,
+          name: `Quick Assessment - ${acc?.name || 'AWS'}`,
+          cloud_account: accountId,
+          cloud_account_name: acc?.name || 'AWS',
+          cloud_provider: 'AWS',
+          scan_type: scanType as any,
+          status: 'running',
+          findings_count: 0,
+          overall_score: 100,
+          created_at: new Date().toISOString(),
+          completed_at: null
+        };
+        setScans([newScan, ...scans]);
+        setPage('Scans');
 
-    // Simulate finishing after 4 seconds
-    setTimeout(() => {
-      setScans(prevScans => prevScans.map(s => {
-        if (s.id === newScanId) {
-          return {
-            ...s,
-            status: 'completed',
-            findings_count: 4,
-            overall_score: 78,
-            completed_at: new Date().toISOString(),
-            result: {
-              id: Date.now(),
-              overall_score: 78,
-              critical_count: 1,
-              high_count: 1,
-              medium_count: 2,
-              low_count: 0,
-              total_buckets: 3,
-              public_buckets: 1,
-              private_buckets: 2,
-              critical_buckets: 1,
-              total_iam_users: 4,
-              users_without_mfa: 1,
-              admin_users: 1,
-              inactive_users: 0,
-              high_risk_users: 1
+        // Simulate finishing after 4 seconds
+        setTimeout(() => {
+          setScans(prevScans => prevScans.map(s => {
+            if (s.id === newScanId) {
+              return {
+                ...s,
+                status: 'completed',
+                findings_count: 4,
+                overall_score: 78,
+                completed_at: new Date().toISOString(),
+                result: {
+                  id: Date.now(),
+                  overall_score: 78,
+                  critical_count: 1,
+                  high_count: 1,
+                  medium_count: 2,
+                  low_count: 0,
+                  total_buckets: 3,
+                  public_buckets: 1,
+                  private_buckets: 2,
+                  critical_buckets: 1,
+                  total_iam_users: 4,
+                  users_without_mfa: 1,
+                  admin_users: 1,
+                  inactive_users: 0,
+                  high_risk_users: 1
+                }
+              };
             }
-          };
-        }
-        return s;
-      }));
+            return s;
+          }));
 
-      // Append mock findings for this new scan
-      const newMockFindings: Finding[] = [
-        {
-          id: Date.now(), scan: newScanId, scan_name: newScan.name, cloud_account: accountId, cloud_account_name: acc?.name || 'AWS',
-          service: 'S3', severity: 'critical', status: 'open', finding_type: 'storage',
-          title: 'Publicly exposing database credentials in S3 config logs',
-          description: 'The bucket config-logs contains an object db_backup.sql that has hardcoded passwords.',
-          bucket_name: 'config-logs', region: acc?.region || 'us-east-1', exposure_type: 'Anonymous Read Access',
-          evidence: 's3://config-logs/db_backup.sql: PASSWORD="rootpassword123"',
-          remediation: 'Immediately remove config logs or encrypt details with KMS.',
-          references: 'https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html',
-          created_at: new Date().toISOString()
-        }
-      ];
-      setFindings(prev => [...newMockFindings, ...prev]);
-    }, 4000);
-  };
+          // Append mock findings for this new scan
+          const newMockFindings: Finding[] = [
+            {
+              id: Date.now(), scan: newScanId, scan_name: newScan.name, cloud_account: accountId, cloud_account_name: acc?.name || 'AWS',
+              service: 'S3', severity: 'critical', status: 'open', finding_type: 'storage',
+              title: 'Publicly exposing database credentials in S3 config logs',
+              description: 'The bucket config-logs contains an object db_backup.sql that has hardcoded passwords.',
+              bucket_name: 'config-logs', region: acc?.region || 'us-east-1', exposure_type: 'Anonymous Read Access',
+              evidence: 's3://config-logs/db_backup.sql: PASSWORD="rootpassword123"',
+              remediation: 'Immediately remove config logs or encrypt details with KMS.',
+              references: 'https://docs.aws.amazon.com/AmazonS3/latest/userguide/Welcome.html',
+              created_at: new Date().toISOString()
+            }
+          ];
+          setFindings(prev => [...newMockFindings, ...prev]);
+        }, 4000);
 
-  const handleRescan = (scanId: number) => {
-    const scan = scans.find(s => s.id === scanId);
-    if (scan) {
-      handleTriggerScan(scan.cloud_account, scan.scan_type);
+      } else {
+        await apiCall(`/accounts/${accountId}/run_scan/`, {
+          method: 'POST',
+          body: JSON.stringify({ scan_type: scanType })
+        });
+        setPage('Scans');
+        fetchData();
+      }
+    } catch (err: any) {
+      alert(err.message || 'Failed to start scan');
     }
   };
 
-  const handleCancelScan = (scanId: number) => {
-    setScans(scans.map(s => s.id === scanId ? { ...s, status: 'failed' } : s));
+  const handleRescan = async (scanId: number) => {
+    try {
+      if (isDemoMode) {
+        const scan = scans.find(s => s.id === scanId);
+        if (scan) {
+          handleTriggerScan(scan.cloud_account, scan.scan_type);
+        }
+      } else {
+        await apiCall(`/scans/${scanId}/rescan/`, { method: 'POST' });
+        setPage('Scans');
+        fetchData();
+      }
+    } catch (err: any) {
+      alert(err.message || 'Rescan failed');
+    }
   };
 
-  const handleDeleteScan = (scanId: number) => {
+  const handleCancelScan = async (scanId: number) => {
+    try {
+      if (isDemoMode) {
+        setScans(scans.map(s => s.id === scanId ? { ...s, status: 'failed' } : s));
+      } else {
+        await apiCall(`/scans/${scanId}/cancel_scan/`, { method: 'POST' });
+        fetchData();
+      }
+    } catch (err: any) {
+      alert(err.message || 'Cancellation failed');
+    }
+  };
+
+  const handleDeleteScan = async (scanId: number) => {
     if (!confirm('Are you sure you want to delete this scan and all its findings?')) return;
-    setScans(scans.filter(s => s.id !== scanId));
-    setFindings(findings.filter(f => f.scan !== scanId));
-  };
-
-  // Findings Status Workflow - local only
-  const handleUpdateFindingStatus = (findingId: number, newStatus: string) => {
-    setFindings(findings.map(f => f.id === findingId ? { ...f, status: newStatus as any } : f));
-    if (selectedFinding && selectedFinding.id === findingId) {
-      setSelectedFinding({ ...selectedFinding, status: newStatus as any });
+    try {
+      if (isDemoMode) {
+        setScans(scans.filter(s => s.id !== scanId));
+        setFindings(findings.filter(f => f.scan !== scanId));
+      } else {
+        await apiCall(`/scans/${scanId}/`, { method: 'DELETE' });
+        fetchData();
+      }
+    } catch (err: any) {
+      alert(err.message || 'Delete failed');
     }
   };
 
-  // Report Operations - local only
-  const handleGenerateReport = (e: React.FormEvent) => {
+  // Findings Status Workflow
+  const handleUpdateFindingStatus = async (findingId: number, newStatus: string) => {
+    try {
+      if (isDemoMode) {
+        setFindings(findings.map(f => f.id === findingId ? { ...f, status: newStatus as any } : f));
+        if (selectedFinding && selectedFinding.id === findingId) {
+          setSelectedFinding({ ...selectedFinding, status: newStatus as any });
+        }
+      } else {
+        const updated = await apiCall(`/findings/${findingId}/update_status/`, {
+          method: 'PATCH',
+          body: JSON.stringify({ status: newStatus })
+        });
+        setFindings(findings.map(f => f.id === findingId ? updated : f));
+        if (selectedFinding && selectedFinding.id === findingId) {
+          setSelectedFinding(updated);
+        }
+      }
+    } catch (err: any) {
+      alert(err.message || 'Status update failed');
+    }
+  };
+
+  // Report Operations
+  const handleGenerateReport = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!reportScanId) return;
     setGeneratingReport(true);
 
-    setTimeout(() => {
-      const scan = scans.find(s => s.id === Number(reportScanId));
-      const newReport: Report = {
-        id: Date.now(),
-        scan: Number(reportScanId),
-        scan_name: scan?.name || 'Assessment Scan',
-        cloud_account_name: scan?.cloud_account_name || 'AWS Env',
-        format: reportFormat,
-        report_file: null,
-        report_file_url: '#',
-        created_at: new Date().toISOString()
-      };
-      setReports([newReport, ...reports]);
+    try {
+      if (isDemoMode) {
+        await new Promise(r => setTimeout(r, 1200));
+        const scan = scans.find(s => s.id === Number(reportScanId));
+        const newReport: Report = {
+          id: Date.now(),
+          scan: Number(reportScanId),
+          scan_name: scan?.name || 'Assessment Scan',
+          cloud_account_name: scan?.cloud_account_name || 'AWS Env',
+          format: reportFormat,
+          report_file: null,
+          report_file_url: '#',
+          created_at: new Date().toISOString()
+        };
+        setReports([newReport, ...reports]);
+      } else {
+        await apiCall('/reports/', {
+          method: 'POST',
+          body: JSON.stringify({ scan: reportScanId, format: reportFormat })
+        });
+        fetchData();
+      }
       setReportScanId('');
+    } catch (err: any) {
+      alert(err.message || 'Failed to generate report');
+    } finally {
       setGeneratingReport(false);
-    }, 1200);
+    }
   };
 
-  const handleDownloadReport = (report: Report) => {
-    alert('Mock download completed successfully. Report compiled in ' + report.format.toUpperCase() + ' format.');
+  const handleDownloadReport = async (report: Report) => {
+    if (isDemoMode) {
+      alert('Mock download completed successfully. Report compiled in ' + report.format.toUpperCase() + ' format.');
+      return;
+    }
+
+    try {
+      const response = await apiCall(`/reports/${report.id}/download/`, { method: 'GET' });
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `report_scan_${report.scan}.${report.format}`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (err: any) {
+      alert('Failed to download file: ' + err.message);
+    }
   };
 
   // Filter & Search Logic
@@ -340,10 +488,18 @@ export default function App() {
           </div>
           <h2 className="login-title">Sign In</h2>
           <p className="login-subtitle">Cloud Security Assessment Platform</p>
+          
+          {authError && (
+            <div style={{ backgroundColor: 'rgba(239,68,68,0.15)', color: '#F87171', padding: '12px', borderRadius: '8px', fontSize: '14px', marginBottom: '20px', textAlign: 'left', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <XCircle size={16} />
+              {authError}
+            </div>
+          )}
 
           <div style={{ backgroundColor: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', padding: '12px', borderRadius: '8px', marginBottom: '20px', fontSize: '13px' }}>
-            <p style={{ margin: '0 0 8px 0', fontWeight: 600, color: 'var(--primary)' }}>Frontend Demo:</p>
-            <p style={{ margin: '4px 0', color: 'var(--text-secondary)' }}>Use any username and password to enter the demo.</p>
+            <p style={{ margin: '0 0 8px 0', fontWeight: 600, color: 'var(--primary)' }}>Demo Credentials:</p>
+            <p style={{ margin: '4px 0', color: 'var(--text-secondary)' }}>Username: <strong>demo</strong></p>
+            <p style={{ margin: '4px 0', color: 'var(--text-secondary)' }}>Password: <strong>demo</strong></p>
           </div>
 
           <div className="form-group">
@@ -371,12 +527,12 @@ export default function App() {
           </div>
 
           <button type="submit" className="btn btn-primary" style={{ width: '100%', marginTop: '12px' }}>
-            Enter Demo
+            Get Started
             <ArrowRight size={16} />
           </button>
 
           <p style={{ marginTop: '24px', fontSize: '12px', color: 'var(--text-muted)' }}>
-            Frontend-only demo: Any username/password accepted.
+            Sandbox Demo: Enter any username/password or use the credentials above.
           </p>
         </form>
       </div>
@@ -408,10 +564,12 @@ export default function App() {
           <span className="logo-text">NiceDash <span style={{ color: 'var(--primary)', fontSize: '10px', verticalAlign: 'super' }}>VAPT</span></span>
         </div>
 
-        <div style={{ backgroundColor: 'rgba(59, 130, 246, 0.12)', color: 'var(--primary)', border: '1px solid rgba(59, 130, 246, 0.2)', padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '20px' }}>
-          <ShieldCheck size={14} />
-          Frontend Demo
-        </div>
+        {isDemoMode && (
+          <div style={{ backgroundColor: 'rgba(245, 158, 11, 0.12)', color: 'var(--warning)', border: '1px solid rgba(245, 158, 11, 0.2)', padding: '8px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '20px' }}>
+            <Database size={14} />
+            Demo Mode (Offline)
+          </div>
+        )}
 
         <nav className="nav-menu">
           <div className={`nav-item ${page === 'Dashboard' ? 'active' : ''}`} onClick={() => setPage('Dashboard')}>
@@ -485,6 +643,9 @@ export default function App() {
                 Quick Scan
               </button>
             )}
+            <button className="btn btn-secondary" onClick={fetchData} title="Refresh Data">
+              <RefreshCw size={16} />
+            </button>
           </div>
         </header>
 
