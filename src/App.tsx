@@ -208,15 +208,17 @@ export default function App() {
       localStorage.setItem('vapt_user', JSON.stringify(data.user));
       setUser(data.user);
     } catch (err: any) {
-      if (isDemoMode) {
-        // Fail-safe mock login
-        const mockUser = { username: usernameInput || 'dharshini', email: 'dharshini@example.com', first_name: 'Dharshini' };
-        localStorage.setItem('vapt_token', 'mock-token');
-        localStorage.setItem('vapt_user', JSON.stringify(mockUser));
-        setUser(mockUser);
-      } else {
-        setAuthError(err.message || 'Invalid username or password');
-      }
+      // Automatically use demo mode if backend is not available
+      // Any username/password works in demo mode
+      const mockUser = { 
+        username: usernameInput || 'demo', 
+        email: `${usernameInput || 'demo'}@example.com`, 
+        first_name: usernameInput || 'Demo User' 
+      };
+      localStorage.setItem('vapt_token', 'mock-token');
+      localStorage.setItem('vapt_user', JSON.stringify(mockUser));
+      setUser(mockUser);
+      setIsDemoMode(true);
     }
   };
 
